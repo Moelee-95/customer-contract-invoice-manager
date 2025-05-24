@@ -111,10 +111,16 @@ class InvoiceUpdateManager {
                 throw new Exception("Customer with ID " . $data['customerId'] . " not found");
             }
             
+            // Get old invoice data before updating (for audit logging)
+            $oldInvoiceData = $this->getInvoiceData($invoiceId);
+
+            // Temporary debugging - remove this after testing
+            error_log('Old invoice data: ' . print_r($oldInvoiceData, true));
+
             if (!$this->connection->autocommit(false)) {
                 throw new Exception("Failed to start transaction");
             }
-            
+
             try {
                 $this->updateInvoiceMain($invoiceId, $data, $customerName);
                 $this->deleteInvoiceItems($invoiceId);
@@ -126,6 +132,53 @@ class InvoiceUpdateManager {
                 
                 $this->connection->autocommit(true);
                 
+                // Prepare old values for logging
+                // Prepare old values for logging
+                $oldValues = null;
+                if ($oldInvoiceData) {
+                    $oldValues = [
+                        'customer_id' => $oldInvoiceData['customer_id'],
+                        'customer_name' => $oldInvoiceData['customer_name'],
+                        'invoice_date' => $oldInvoiceData['inv_date'],
+                        'status' => $oldInvoiceData['done_undone'],
+                        'items' => $oldInvoiceData['items'] ?? []
+                    ];
+                }
+
+                // Log the successful invoice update
+                $this->logUserAction(
+                    $data['createdBy'],
+                    'UPDATE',
+                    'invoices',
+                    $invoiceId,
+                    'Updated invoice for customer: ' . $customerName,
+                    [
+                        'customer_id' => $data['customerId'],
+                        'customer_name' => $customerName,
+                        'invoice_date' => $data['invoiceDate'],
+                        'status' => isset($data['done']) && $data['done'] ? 'Done' : 'Undone',
+                        'items_count' => count($data['items'])
+                    ],
+                    $oldValues
+                );
+
+                // Log the successful invoice update
+                $this->logUserAction(
+                    $data['createdBy'],
+                    'UPDATE',
+                    'invoices',
+                    $invoiceId,
+                    'Updated invoice for customer: ' . $customerName,
+                    [
+                        'customer_id' => $data['customerId'],
+                        'customer_name' => $customerName,
+                        'invoice_date' => $data['invoiceDate'],
+                        'status' => isset($data['done']) && $data['done'] ? 'Done' : 'Undone',
+                        'items_count' => count($data['items'])
+                    ],
+                    $oldValues  // This will now contain the old values
+                );
+
                 return [
                     'success' => true,
                     'message' => 'Invoice updated successfully',
@@ -146,6 +199,21 @@ class InvoiceUpdateManager {
             }
             
         } catch (Exception $e) {
+            // Log the error
+            if (isset($data['createdBy'])) {
+                $this->logUserAction(
+                    $data['createdBy'],
+                    'UPDATE',
+                    'invoices',
+                    $invoiceId,
+                    'Error updating invoice ID: ' . $invoiceId,
+                    null,
+                    null,
+                    'FAILED',
+                    $e->getMessage()
+                );
+            }
+            
             return [
                 'success' => false,
                 'message' => 'Database error: ' . $e->getMessage(),
@@ -285,6 +353,122 @@ class InvoiceUpdateManager {
         $stmt->close();
         
         return $customer ? $customer['name'] : false;
+    }
+
+    public function logUserAction($userId, $actionType, $tableName, $recordId, $description, $newValues = null, $oldValues = null, $status = 'SUCCESS', $errorMessage = null) {
+        try {
+            $query = "INSERT INTO users_actions (
+                        user_id, 
+                        action_type, 
+                        table_name, 
+                        record_id, 
+                        action_description, 
+                        new_values, 
+                        old_values, 
+                        ip_address, 
+                        user_agent, 
+                        status, 
+                        error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                error_log('Audit log prepare failed: ' . $this->connection->error);
+                return false;
+            }
+            
+            // Get user's IP address
+            $ipAddress = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            
+            // Get user agent
+            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+            
+            // Convert arrays to JSON
+            $newValuesJson = $newValues ? json_encode($newValues) : null;
+            $oldValuesJson = $oldValues ? json_encode($oldValues) : null;
+            
+            $stmt->bind_param('isissssssss',
+                $userId,
+                $actionType,
+                $tableName,
+                $recordId,
+                $description,
+                $newValuesJson,
+                $oldValuesJson,
+                $ipAddress,
+                $userAgent,
+                $status,
+                $errorMessage
+            );
+            
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if (!$result) {
+                error_log('Audit log execution failed: ' . $this->connection->error);
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            error_log('Audit logging error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function getInvoiceData($invoiceId) {
+        try {
+            // Get invoice main data
+            $stmt = $this->connection->prepare("SELECT * FROM invoices WHERE id = ?");
+            if (!$stmt) {
+                error_log('Failed to prepare invoice query: ' . $this->connection->error);
+                return null;
+            }
+            
+            $stmt->bind_param('i', $invoiceId);
+            if (!$stmt->execute()) {
+                error_log('Failed to execute invoice query: ' . $stmt->error);
+                $stmt->close();
+                return null;
+            }
+            
+            $result = $stmt->get_result();
+            $invoiceData = $result->fetch_assoc();
+            $stmt->close();
+            
+            if (!$invoiceData) {
+                return null;
+            }
+            
+            // Get invoice items
+            $stmt = $this->connection->prepare("SELECT * FROM invoice_item WHERE invoice_id = ?");
+            if (!$stmt) {
+                error_log('Failed to prepare items query: ' . $this->connection->error);
+                return $invoiceData; // Return at least the main invoice data
+            }
+            
+            $stmt->bind_param('i', $invoiceId);
+            if (!$stmt->execute()) {
+                error_log('Failed to execute items query: ' . $stmt->error);
+                $stmt->close();
+                return $invoiceData;
+            }
+            
+            $itemsResult = $stmt->get_result();
+            $items = [];
+            while ($item = $itemsResult->fetch_assoc()) {
+                $items[] = $item;
+            }
+            $stmt->close();
+            
+            $invoiceData['items'] = $items;
+            return $invoiceData;
+            
+        } catch (Exception $e) {
+            error_log('Error in getInvoiceData: ' . $e->getMessage());
+            return null;
+        }
     }
 }
 ?>

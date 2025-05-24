@@ -1,5 +1,24 @@
 <?php
+// Start the session
+session_start();
 
+// Check if user is NOT logged in
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true || !isset($_SESSION['user_id'])) {
+    // User is not logged in, redirect to login page
+    header("Location: ../login.php");
+    exit();
+}
+
+// Handle logout request
+if (isset($_GET['logout']) && $_GET['logout'] === 'true') {
+    // Destroy all session data
+    session_unset();
+    session_destroy();
+    
+    // Redirect to login page
+    header("Location: ../login.php");
+    exit();
+}
 require_once '../../db_connect.php';
 
 class InvoiceDeleteManager {
@@ -16,24 +35,26 @@ class InvoiceDeleteManager {
                 throw new Exception("Invalid invoice ID provided");
             }
             
-            // Check if invoice exists
-            $checkStmt = $this->connection->prepare("SELECT id, customer_name FROM invoices WHERE id = ?");
-            if (!$checkStmt) {
-                throw new Exception('Prepare failed: ' . $this->connection->error);
-            }
+            // Get invoice data before deletion for logging
+            $invoiceData = $this->getInvoiceById($invoiceId);
+            $userId = $_SESSION['user_id'];
             
-            $checkStmt->bind_param('i', $invoiceId);
-            $checkStmt->execute();
-            $result = $checkStmt->get_result();
-            
-            if ($result->num_rows === 0) {
-                $checkStmt->close();
+            if (!$invoiceData) {
+                // Log the failed deletion attempt
+                $this->logUserAction(
+                    $userId,
+                    'DELETE',
+                    'invoices',
+                    $invoiceId,
+                    'Failed to delete invoice: Invoice not found',
+                    null,
+                    null,
+                    'FAILED',
+                    'Invoice not found'
+                );
+                
                 throw new Exception("Invoice not found");
             }
-            
-            $invoice = $result->fetch_assoc();
-            $customerName = $invoice['customer_name'];
-            $checkStmt->close();
             
             // Start transaction
             $this->connection->autocommit(false);
@@ -73,12 +94,23 @@ class InvoiceDeleteManager {
                 $this->connection->commit();
                 $this->connection->autocommit(true);
                 
+                // Log the successful invoice deletion
+                $this->logUserAction(
+                    $userId,
+                    'DELETE',
+                    'invoices',
+                    $invoiceId,
+                    'Deleted invoice: ' . ($invoiceData['customer_name'] ?? 'Unknown customer'),
+                    null,
+                    $invoiceData
+                );
+                
                 return [
                     'success' => true,
                     'message' => 'Invoice deleted successfully',
                     'data' => [
                         'invoiceId' => $invoiceId,
-                        'customerName' => $customerName,
+                        'customerName' => $invoiceData['customer_name'],
                         'deletedItemsCount' => $deletedItemsCount
                     ]
                 ];
@@ -91,11 +123,104 @@ class InvoiceDeleteManager {
             }
             
         } catch (Exception $e) {
+            // Log the error
+            $this->logUserAction(
+                $userId ?? 1,
+                'DELETE',
+                'invoices',
+                $invoiceId,
+                'Error deleting invoice: ' . ($invoiceData['customer_name'] ?? 'Unknown'),
+                null,
+                $invoiceData ?? null,
+                'FAILED',
+                $e->getMessage()
+            );
+            
             return [
                 'success' => false,
                 'message' => 'Database error: ' . $e->getMessage(),
                 'data' => null
             ];
+        }
+    }
+
+    public function logUserAction($userId, $actionType, $tableName, $recordId, $description, $newValues = null, $oldValues = null, $status = 'SUCCESS', $errorMessage = null) {
+        try {
+            $query = "INSERT INTO users_actions (
+                        user_id, 
+                        action_type, 
+                        table_name, 
+                        record_id, 
+                        action_description, 
+                        new_values, 
+                        old_values, 
+                        ip_address, 
+                        user_agent, 
+                        status, 
+                        error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                error_log('Audit log prepare failed: ' . $this->connection->error);
+                return false;
+            }
+            
+            $ipAddress = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+            $newValuesJson = $newValues ? json_encode($newValues) : null;
+            $oldValuesJson = $oldValues ? json_encode($oldValues) : null;
+            
+            $stmt->bind_param('isissssssss',
+                $userId,
+                $actionType,
+                $tableName,
+                $recordId,
+                $description,
+                $newValuesJson,
+                $oldValuesJson,
+                $ipAddress,
+                $userAgent,
+                $status,
+                $errorMessage
+            );
+            
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if (!$result) {
+                error_log('Audit log execution failed: ' . $this->connection->error);
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            error_log('Audit logging error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    public function getInvoiceById($invoiceId) {
+        try {
+            $query = "SELECT * FROM invoices WHERE id = ?";
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                return null;
+            }
+            
+            $stmt->bind_param('i', $invoiceId);
+            $stmt->execute();
+            
+            $result = $stmt->get_result();
+            $invoice = $result->fetch_assoc();
+            $stmt->close();
+            
+            return $invoice;
+            
+        } catch (Exception $e) {
+            return null;
         }
     }
 }

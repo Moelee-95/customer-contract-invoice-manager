@@ -66,7 +66,9 @@ class ContractUpdater {
             if (!$checkStmt) {
                 throw new Exception('Prepare failed: ' . $this->connection->error);
             }
-            
+
+            $oldContractData = $this->getContractData($id);
+
             $checkStmt->bind_param('i', $id);
             $checkStmt->execute();
             $result = $checkStmt->get_result();
@@ -143,7 +145,27 @@ class ContractUpdater {
             if ($stmt->execute()) {
                 if ($stmt->affected_rows > 0) {
                     $stmt->close();
-                    
+
+                     // Prepare new values for logging
+                    $newValues = [
+                        'customer_id' => $customerId,
+                        'start_date' => $startDate,
+                        'expire_date' => $expireDate,
+                        'payment' => $payment,
+                        'note' => $note,
+                        'created_by_user' => $createdBy
+                    ];
+
+                    // Log the successful contract update
+                    $this->logUserAction(
+                        $createdBy,
+                        'UPDATE',
+                        'contracts',
+                        $id,
+                        'Updated contract ID: ' . $id,
+                        $newValues,
+                        $oldContractData
+                    );
                     return [
                         'success' => true,
                         'message' => 'Contract updated successfully',
@@ -163,6 +185,20 @@ class ContractUpdater {
             }
             
         } catch (Exception $e) {
+            // Log the error
+            if (isset($contractData['createdBy'])) {
+                $this->logUserAction(
+                    $contractData['createdBy'],
+                    'UPDATE',
+                    'contracts',
+                    $id,
+                    'Error updating contract ID: ' . $id,
+                    null,
+                    null,
+                    'FAILED',
+                    $e->getMessage()
+                );
+            }
             return [
                 'success' => false,
                 'message' => 'Database error: ' . $e->getMessage()
@@ -173,6 +209,91 @@ class ContractUpdater {
     private function isValidDate($date) {
         $d = DateTime::createFromFormat('Y-m-d', $date);
         return $d && $d->format('Y-m-d') === $date;
+    }
+
+    private function logUserAction($userId, $actionType, $tableName, $recordId, $description, $newValues = null, $oldValues = null, $status = 'SUCCESS', $errorMessage = null) {
+        try {
+            $query = "INSERT INTO users_actions (
+                        user_id, 
+                        action_type, 
+                        table_name, 
+                        record_id, 
+                        action_description, 
+                        new_values, 
+                        old_values, 
+                        ip_address, 
+                        user_agent, 
+                        status, 
+                        error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                error_log('Audit log prepare failed: ' . $this->connection->error);
+                return false;
+            }
+            
+            // Get user's IP address
+            $ipAddress = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            
+            // Get user agent
+            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+            
+            // Convert arrays to JSON
+            $newValuesJson = $newValues ? json_encode($newValues) : null;
+            $oldValuesJson = $oldValues ? json_encode($oldValues) : null;
+            
+            $stmt->bind_param('isissssssss',
+                $userId,
+                $actionType,
+                $tableName,
+                $recordId,
+                $description,
+                $newValuesJson,
+                $oldValuesJson,
+                $ipAddress,
+                $userAgent,
+                $status,
+                $errorMessage
+            );
+            
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if (!$result) {
+                error_log('Audit log execution failed: ' . $this->connection->error);
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            error_log('Audit logging error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    private function getContractData($id) {
+        try {
+            $query = "SELECT customer_id, start_date, expire_date, payment, note, created_by_user 
+                    FROM contracts WHERE id = ?";
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                return null;
+            }
+            
+            $stmt->bind_param('i', $id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $data = $result->fetch_assoc();
+            $stmt->close();
+            
+            return $data;
+            
+        } catch (Exception $e) {
+            return null;
+        }
     }
 }
 

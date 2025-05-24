@@ -78,6 +78,22 @@ class InvoiceManager {
             
             $stmt->close();
             
+            // Log the successful invoice creation
+            $this->logUserAction(
+                $data['createdBy'],
+                'CREATE',
+                'invoices',
+                null, // We don't have the invoice ID from the stored procedure
+                'Created new invoice for customer: ' . $customerName,
+                [
+                    'customer_id' => $data['customerId'],
+                    'customer_name' => $customerName,
+                    'invoice_date' => $data['invoiceDate'],
+                    'status' => $doneStatus,
+                    'items_count' => count($data['items'])
+                ]
+            );
+
             return [
                 'success' => true,
                 'message' => 'Invoice created successfully',
@@ -90,7 +106,22 @@ class InvoiceManager {
                 ]
             ];
             
-        } catch (Exception $e) {
+        } catch (Exception $e) 
+        {
+        // Record if something went wrong
+        if (isset($data['createdBy'])) {
+            $this->logUserAction(
+                $data['createdBy'],
+                'CREATE',
+                'invoices',
+                null,
+                'Error creating invoice for customer: ' . ($data['customerId'] ?? 'unknown'),
+                null,
+                null,
+                'FAILED',
+                $e->getMessage()
+            );
+        }
             return [
                 'success' => false,
                 'message' => 'Database error: ' . $e->getMessage(),
@@ -120,6 +151,69 @@ class InvoiceManager {
             return false;
         }
     }
+
+    public function logUserAction($userId, $actionType, $tableName, $recordId, $description, $newValues = null, $oldValues = null, $status = 'SUCCESS', $errorMessage = null) {
+        try {
+            $query = "INSERT INTO users_actions (
+                        user_id, 
+                        action_type, 
+                        table_name, 
+                        record_id, 
+                        action_description, 
+                        new_values, 
+                        old_values, 
+                        ip_address, 
+                        user_agent, 
+                        status, 
+                        error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                error_log('Audit log prepare failed: ' . $this->connection->error);
+                return false;
+            }
+            
+            // Get user's IP address
+            $ipAddress = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            
+            // Get user agent
+            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+            
+            // Convert arrays to JSON
+            $newValuesJson = $newValues ? json_encode($newValues) : null;
+            $oldValuesJson = $oldValues ? json_encode($oldValues) : null;
+            
+            $stmt->bind_param('isissssssss',
+                $userId,
+                $actionType,
+                $tableName,
+                $recordId,
+                $description,
+                $newValuesJson,
+                $oldValuesJson,
+                $ipAddress,
+                $userAgent,
+                $status,
+                $errorMessage
+            );
+            
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if (!$result) {
+                error_log('Audit log execution failed: ' . $this->connection->error);
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            error_log('Audit logging error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
 }
 
 // Set content type to JSON

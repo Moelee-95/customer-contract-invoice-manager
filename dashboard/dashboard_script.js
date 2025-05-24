@@ -2,7 +2,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            activeTab: 'customers',
+            activeTab: 'contracts',
 
             // Data arrays
             customers: [],

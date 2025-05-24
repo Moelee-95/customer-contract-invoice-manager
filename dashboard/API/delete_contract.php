@@ -2,6 +2,21 @@
 
 require_once '../../db_connect.php';
 
+// Start the session
+session_start();
+
+// Check if user is NOT logged in
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true || !isset($_SESSION['user_id'])) {
+    // User is not logged in, redirect to login page
+    header("Location: ../login.php");
+    exit();
+}
+
+
+
+// $user_id = $_SESSION['user_id'];
+
+
 class ContractDeleter {
     private $connection;
     
@@ -9,8 +24,11 @@ class ContractDeleter {
         $this->connection = $db;
     }
     
-    public function deleteContract($id) {
+    public function deleteContract($id, $userId = 1) {
         try {
+            // Get contract data BEFORE any checks for logging purposes
+            $oldContractData = $this->getContractData($id);
+            
             // Check if contract exists
             $checkQuery = "SELECT id FROM contracts WHERE id = ?";
             $checkStmt = $this->connection->prepare($checkQuery);
@@ -53,6 +71,16 @@ class ContractDeleter {
                         $this->connection->commit();
                         $deleteStmt->close();
                         
+                        // Log the successful contract deletion
+                        $this->logUserAction(
+                            $userId,
+                            'DELETE',
+                            'contracts',
+                            $id,
+                            'Deleted contract ID: ' . $id,
+                            null,
+                            $oldContractData
+                        );
                         return [
                             'success' => true,
                             'message' => 'Contract deleted successfully',
@@ -161,6 +189,92 @@ class ContractDeleter {
                 'success' => false,
                 'message' => 'Database error: ' . $e->getMessage()
             ];
+        }
+    }
+
+    private function logUserAction($userId, $actionType, $tableName, $recordId, $description, $newValues = null, $oldValues = null, $status = 'SUCCESS', $errorMessage = null) {
+        try {
+            $query = "INSERT INTO users_actions (
+                        user_id, 
+                        action_type, 
+                        table_name, 
+                        record_id, 
+                        action_description, 
+                        new_values, 
+                        old_values, 
+                        ip_address, 
+                        user_agent, 
+                        status, 
+                        error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                error_log('Audit log prepare failed: ' . $this->connection->error);
+                return false;
+            }
+            
+            // Get user's IP address
+            $ipAddress = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+            
+            // Get user agent
+            $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+            
+            // Convert arrays to JSON
+            $newValuesJson = $newValues ? json_encode($newValues) : null;
+            $oldValuesJson = $oldValues ? json_encode($oldValues) : null;
+            
+            $stmt->bind_param('isissssssss',
+                $userId,
+                $actionType,
+                $tableName,
+                $recordId,
+                $description,
+                $newValuesJson,
+                $oldValuesJson,
+                $ipAddress,
+                $userAgent,
+                $status,
+                $errorMessage
+            );
+            
+            $result = $stmt->execute();
+            $stmt->close();
+            
+            if (!$result) {
+                error_log('Audit log execution failed: ' . $this->connection->error);
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            error_log('Audit logging error: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    // get contract data before deletion
+    private function getContractData($id) {
+        try {
+            $query = "SELECT customer_id, start_date, expire_date, payment, note, created_by_user 
+                    FROM contracts WHERE id = ?";
+            $stmt = $this->connection->prepare($query);
+            
+            if (!$stmt) {
+                return null;
+            }
+            
+            $stmt->bind_param('i', $id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $data = $result->fetch_assoc();
+            $stmt->close();
+            
+            return $data;
+            
+        } catch (Exception $e) {
+            return null;
         }
     }
 }
