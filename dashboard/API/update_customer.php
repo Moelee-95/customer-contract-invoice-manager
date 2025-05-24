@@ -1,7 +1,6 @@
 <?php
 
-
-
+require_once 'session.php';
 require_once '../../db_connect.php';
 
 class CustomerUpdater {

@@ -55,11 +55,6 @@ $username = $_SESSION['username'];
 
     <div id="app">
         <div class="container">
-            <div class="header">
-                <h1>Customer Management Dashboard</h1>
-                <p>Manage customers, contracts, and invoices</p>
-            </div>
-
             <div class="nav-tabs">
                 <button class="nav-tab" :class="{active: activeTab === 'customers'}" @click="activeTab = 'customers'">
                     Customers
@@ -69,6 +64,9 @@ $username = $_SESSION['username'];
                 </button>
                 <button class="nav-tab" :class="{active: activeTab === 'invoices'}" @click="activeTab = 'invoices'">
                     Invoices
+                </button>
+                <button class="nav-tab" :class="{active: activeTab === 'logs'}" @click="activeTab = 'logs'">
+                    User Actions
                 </button>
             </div>
 
@@ -194,6 +192,123 @@ $username = $_SESSION['username'];
                 </div>
             </div>
 
+            <!-- User Actions Logs Section -->
+            <div v-if="activeTab === 'logs'" class="content-section">
+                <div class="section-header">
+                    <h2>User Actions Logs</h2>
+                    <div class="filters">
+                        <select v-model="logsFilter.actionType" @change="fetchLogs" class="form-control" style="width: 150px; display: inline-block; margin-right: 10px;">
+                            <option value="">All Actions</option>
+                            <option value="CREATE">Create</option>
+                            <option value="UPDATE">Update</option>
+                            <option value="DELETE">Delete</option>
+                        </select>
+                        <select v-model="logsFilter.tableName" @change="fetchLogs" class="form-control" style="width: 150px; display: inline-block; margin-right: 10px;">
+                            <option value="">All Tables</option>
+                            <option value="customers">Customers</option>
+                            <option value="contracts">Contracts</option>
+                            <option value="invoices">Invoices</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" @click="clearLogsFilters">Clear Filters</button>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Record ID</th>
+                                <th>Description</th>
+                                <th>Status</th>
+                                <th>IP Address</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="log in logs" :key="log.id">
+                                <td>{{ formatDateTime(log.created_at) }}</td>
+                                <td>{{ getUserName(log.user_id) }}</td>
+                                <td>
+                                    <span class="action-badge" :class="'action-' + (log.action_type || '').toLowerCase()">
+                                        {{ log.action_type }}
+                                    </span>
+                                </td>
+                                <td>{{ log.record_id }}</td>
+                                <td>{{ log.action_description }}</td>
+                                <td>
+                                    <span class="status-badge" :class="log.status === 'success' ? 'status-success' : 'status-error'">
+                                        {{ log.status }}
+                                    </span>
+                                </td>
+                                <td>{{ log.ip_address }}</td>
+                                <td>
+                                    <button class="btn btn-info btn-sm" @click="viewLogDetails(log)">Details</button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Log Details Modal -->
+            <div v-if="showLogModal" class="modal" @click.self="showLogModal = false">
+                <div class="modal-content" style="max-width: 800px;">
+                    <div class="modal-header">
+                        <h3>Log Details</h3>
+                        <button class="close-btn" @click="showLogModal = false">&times;</button>
+                    </div>
+                    
+                    <div class="log-details">
+                        <div class="detail-row">
+                            <strong>Action:</strong> {{ selectedLog.action_type }} on {{ selectedLog.table_name }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>User:</strong> {{ getUserName(selectedLog.user_id) }} (ID: {{ selectedLog.user_id }})
+                        </div>
+                        <div class="detail-row">
+                            <strong>Date/Time:</strong> {{ formatDateTime(selectedLog.created_at) }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>Record ID:</strong> {{ selectedLog.record_id }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>Description:</strong> {{ selectedLog.action_description }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>Status:</strong> {{ selectedLog.status }}
+                        </div>
+                        <div class="detail-row" v-if="selectedLog.error_message">
+                            <strong>Error Message:</strong> {{ selectedLog.error_message }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>IP Address:</strong> {{ selectedLog.ip_address }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>User Agent:</strong> {{ selectedLog.user_agent }}
+                        </div>
+                        <div class="detail-row">
+                            <strong>Session ID:</strong> {{ selectedLog.session_id }}
+                        </div>
+                        
+                        <div v-if="selectedLog.old_values" class="values-section">
+                            <h4>Old Values:</h4>
+                            <pre>{{ formatJSON(selectedLog.old_values) }}</pre>
+                        </div>
+                        
+                        <div v-if="selectedLog.new_values" class="values-section">
+                            <h4>New Values:</h4>
+                            <pre>{{ formatJSON(selectedLog.new_values) }}</pre>
+                        </div>
+                    </div>
+                    
+                    <div style="text-align: right; margin-top: 20px;">
+                        <button class="btn" @click="showLogModal = false">Close</button>
+                    </div>
+                </div>
+            </div>
             <!-- Customer Modal -->
             <div v-if="showCustomerModal" class="modal" @click.self="showCustomerModal = false">
                 <div class="modal-content">

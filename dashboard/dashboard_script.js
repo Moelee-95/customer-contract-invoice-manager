@@ -2,20 +2,33 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            activeTab: 'contracts',
+            activeTab: 'invoices',
+
+            showLogModal: false,
 
             // Data arrays
             customers: [],
             contracts: [],
             invoices: [],
             userNames: {},
+            logs: [],
+            selectedLog: {},
+            
+            
+
+            logsFilter: {
+                actionType: '',
+                tableName: ''
+            },
 
             // Loading states
             loading: {
                 customers: false,
                 contracts: false,
                 invoices: false,
-                userNames: false
+                userNames: false,
+                logs: false
+                
             },
 
             // Error handling
@@ -23,7 +36,9 @@ createApp({
                 customers: null,
                 contracts: null,
                 invoices: null,
-                userNames: null
+                userNames: null,
+                logs: null
+                
             },
 
             // Modal states
@@ -174,6 +189,77 @@ createApp({
                 // Don't show alert for user names as it's not critical
             } finally {
                 this.loading.userNames = false;
+            }
+        },
+
+        // Logs methods
+        async fetchLogs() {
+            this.loading.logs = true;
+            this.errors.logs = null;
+
+            try {
+                let url = `${this.apiBaseUrl}/get_logs.php`;
+                const params = new URLSearchParams();
+                
+                if (this.logsFilter.actionType) {
+                    params.append('action_type', this.logsFilter.actionType);
+                }
+                if (this.logsFilter.tableName) {
+                    params.append('table_name', this.logsFilter.tableName);
+                }
+                
+                if (params.toString()) {
+                    url += '?' + params.toString();
+                }
+
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    this.logs = result.data;
+                } else {
+                    throw new Error(result.message || 'Failed to fetch logs');
+                }
+
+            } catch (error) {
+                console.error('Error fetching logs:', error);
+                this.errors.logs = error.message;
+                alert('Failed to load logs: ' + error.message);
+            } finally {
+                this.loading.logs = false;
+            }
+        },
+
+        viewLogDetails(log) {
+            this.selectedLog = log;
+            this.showLogModal = true;
+        },
+
+        clearLogsFilters() {
+            this.logsFilter = {
+                actionType: '',
+                tableName: ''
+            };
+            this.fetchLogs();
+        },
+
+        formatDateTime(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleString();
+        },
+
+        formatJSON(jsonStr) {
+            if (!jsonStr) return '';
+            try {
+                return JSON.stringify(JSON.parse(jsonStr), null, 2);
+            } catch (e) {
+                return jsonStr;
             }
         },
         // Customer methods
@@ -784,7 +870,7 @@ createApp({
                 alert('Failed to save invoice: ' + error.message);
             }
         },
-        
+
 
         async deleteInvoice(id) {
             if (!confirm('Are you sure you want to delete this invoice? This action cannot be undone.')) {
@@ -914,5 +1000,6 @@ createApp({
         await this.fetchContracts();
         await this.fetchInvoices();
         await this.fetchUserNames();
+        await this.fetchLogs();
     }
 }).mount('#app');
