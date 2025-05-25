@@ -78,7 +78,6 @@ if (isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true && isset($_
             </button>
         </form>
 
-        <a href="forgot_password.html" class="forgot-password">Forgot your password?</a>
     </div>
 
     <script src="login_script.js"></script>

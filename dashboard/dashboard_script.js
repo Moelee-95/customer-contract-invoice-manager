@@ -61,8 +61,8 @@ createApp({
             nextContractId: 2,
             nextInvoiceId: 2,
 
-            // API base URL - adjust this to server path
-            apiBaseUrl: 'http://localhost/ca/dashboard/API'
+            // API base URL
+            apiBaseUrl: '/ca/dashboard/API'
         }
     },
 
